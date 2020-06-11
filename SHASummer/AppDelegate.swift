@@ -8,13 +8,34 @@
 
 import Cocoa
 import SwiftUI
+import CommonCrypto
 
 @NSApplicationMain
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     var window: NSWindow!
+    var importedFileOnLoad: Bool = false
 
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        print("opening file \(filename)")
 
+        // You must determine if filename points to a file or folder
+        selectedURL = URL(fileURLWithPath: filename)
+        if (selectedURL != nil)
+        {
+            shasum = sha1(url: selectedURL!)
+            copyToClipBoard(textToCopy: shasum)
+            NSApp.terminate(nil)
+            importedFileOnLoad = true
+        }
+        //shasum = sha1(url: selectedURL!)
+        // Now do your things. ..
+
+        // Return true if your app openned the file successfully.
+        
+        return true
+    }
+    
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         // Create the SwiftUI view and set the context as the value for the managedObjectContext environment keyPath.
         // Add `@Environment(\.managedObjectContext)` in the views that will need the context.
@@ -29,6 +50,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.setFrameAutosaveName("Main Window")
         window.contentView = NSHostingView(rootView: contentView)
         window.makeKeyAndOrderFront(nil)
+        
+        if (importedFileOnLoad)
+        {
+            NSApp.terminate(nil)
+        }
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
