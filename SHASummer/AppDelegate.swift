@@ -1,162 +1,154 @@
-//
-//  AppDelegate.swift
-//  SHASummer
-//
-//  Created by Cooper LeComp on 6/11/20.
-//  Copyright © 2020 Cooper LeComp. All rights reserved.
-//
-
-import Cocoa
+import AppKit
+import CryptoKit
 import SwiftUI
-import CommonCrypto
+
+final class HashingController: ObservableObject {
+    @Published private(set) var selectedURL: URL?
+    @Published private(set) var hashValue = ""
+    @Published private(set) var statusMessage = "Select a file to calculate its SHA-256 hash."
+    @Published private(set) var isHashing = false
+
+    var selectedFilePath: String {
+        selectedURL?.path ?? "No file selected"
+    }
+
+    var hashDisplayValue: String {
+        hashValue.isEmpty ? "The SHA-256 hash will appear here." : hashValue
+    }
+
+    func promptForFileSelection() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Hash"
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        hashFile(at: url)
+    }
+
+    func open(urls: [URL], quitWhenFinished: Bool) {
+        guard let url = urls.first else {
+            return
+        }
+
+        hashFile(at: url, quitWhenFinished: quitWhenFinished)
+    }
+
+    private func hashFile(at url: URL, quitWhenFinished: Bool = false) {
+        selectedURL = url
+        hashValue = ""
+        statusMessage = "Calculating SHA-256…"
+        isHashing = true
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let digest = try FileHasher.sha256(for: url)
+
+                DispatchQueue.main.async {
+                    Clipboard.copy(digest)
+                    self.hashValue = digest
+                    self.statusMessage = "SHA-256 copied to the clipboard."
+                    self.isHashing = false
+
+                    if quitWhenFinished {
+                        NSApp.terminate(nil)
+                    }
+                }
+            } catch {
+                let message = "Couldn't hash \(url.lastPathComponent): \(error.localizedDescription)"
+
+                DispatchQueue.main.async {
+                    self.hashValue = ""
+                    self.statusMessage = message
+                    self.isHashing = false
+                    self.presentError(message: message)
+
+                    if quitWhenFinished {
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+        }
+    }
+
+    private func presentError(message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Hashing Failed"
+        alert.informativeText = message
+        alert.runModal()
+    }
+}
+
+private enum Clipboard {
+    static func copy(_ value: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
+    }
+}
+
+private enum FileHasher {
+    static func sha256(for url: URL) throws -> String {
+        let didAccessSecurityScopedResource = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccessSecurityScopedResource {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let fileHandle = try FileHandle(forReadingFrom: url)
+        defer {
+            try? fileHandle.close()
+        }
+
+        let bufferSize = 1024 * 1024
+        var hasher = SHA256()
+
+        while autoreleasepool(invoking: {
+            let data = fileHandle.readData(ofLength: bufferSize)
+            guard !data.isEmpty else {
+                return false
+            }
+
+            hasher.update(data: data)
+            return true
+        }) { }
+
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 @NSApplicationMain
-class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var window: NSWindow?
+    private let hashingController = HashingController()
 
-    var window: NSWindow!
-    var importedFileOnLoad: Bool = false
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let contentView = ContentView(controller: hashingController)
 
-    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        print("opening file \(filename)")
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 360),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
 
-        // You must determine if filename points to a file or folder
-        selectedURL = URL(fileURLWithPath: filename)
-        if (selectedURL != nil)
-        {
-            shasum = sha1(url: selectedURL!)
-            copyToClipBoard(textToCopy: shasum)
-            NSApp.terminate(nil)
-            importedFileOnLoad = true
-        }
-        //shasum = sha1(url: selectedURL!)
-        // Now do your things. ..
-
-        // Return true if your app openned the file successfully.
-        
-        return true
-    }
-    
-    func applicationDidFinishLaunching(_ aNotification: Notification) {
-        // Create the SwiftUI view and set the context as the value for the managedObjectContext environment keyPath.
-        // Add `@Environment(\.managedObjectContext)` in the views that will need the context.
-        let contentView = ContentView().environment(\.managedObjectContext, persistentContainer.viewContext)
-
-        // Create the window and set the content view. 
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 300),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered, defer: false)
         window.center()
+        window.title = "SHASummer"
         window.setFrameAutosaveName("Main Window")
         window.contentView = NSHostingView(rootView: contentView)
         window.makeKeyAndOrderFront(nil)
-        
-        if (importedFileOnLoad)
-        {
-            NSApp.terminate(nil)
-        }
+
+        self.window = window
     }
 
-    func applicationWillTerminate(_ aNotification: Notification) {
-        // Insert code here to tear down your application
+    func application(_ application: NSApplication, open urls: [URL]) {
+        hashingController.open(urls: urls, quitWhenFinished: true)
     }
-
-    // MARK: - Core Data stack
-
-    lazy var persistentContainer: NSPersistentContainer = {
-        /*
-         The persistent container for the application. This implementation
-         creates and returns a container, having loaded the store for the
-         application to it. This property is optional since there are legitimate
-         error conditions that could cause the creation of the store to fail.
-        */
-        let container = NSPersistentContainer(name: "SHASummer")
-        container.loadPersistentStores(completionHandler: { (storeDescription, error) in
-            if let error = error {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                 
-                /*
-                 Typical reasons for an error here include:
-                 * The parent directory does not exist, cannot be created, or disallows writing.
-                 * The persistent store is not accessible, due to permissions or data protection when the device is locked.
-                 * The device is out of space.
-                 * The store could not be migrated to the current model version.
-                 Check the error message to determine what the actual problem was.
-                 */
-                fatalError("Unresolved error \(error)")
-            }
-        })
-        return container
-    }()
-
-    // MARK: - Core Data Saving and Undo support
-
-    @IBAction func saveAction(_ sender: AnyObject?) {
-        // Performs the save action for the application, which is to send the save: message to the application's managed object context. Any encountered errors are presented to the user.
-        let context = persistentContainer.viewContext
-
-        if !context.commitEditing() {
-            NSLog("\(NSStringFromClass(type(of: self))) unable to commit editing before saving")
-        }
-        if context.hasChanges {
-            do {
-                try context.save()
-            } catch {
-                // Customize this code block to include application-specific recovery steps.
-                let nserror = error as NSError
-                NSApplication.shared.presentError(nserror)
-            }
-        }
-    }
-
-    func windowWillReturnUndoManager(window: NSWindow) -> UndoManager? {
-        // Returns the NSUndoManager for the application. In this case, the manager returned is that of the managed object context for the application.
-        return persistentContainer.viewContext.undoManager
-    }
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Save changes in the application's managed object context before the application terminates.
-        let context = persistentContainer.viewContext
-        
-        if !context.commitEditing() {
-            NSLog("\(NSStringFromClass(type(of: self))) unable to commit editing to terminate")
-            return .terminateCancel
-        }
-        
-        if !context.hasChanges {
-            return .terminateNow
-        }
-        
-        do {
-            try context.save()
-        } catch {
-            let nserror = error as NSError
-
-            // Customize this code block to include application-specific recovery steps.
-            let result = sender.presentError(nserror)
-            if (result) {
-                return .terminateCancel
-            }
-            
-            let question = NSLocalizedString("Could not save changes while quitting. Quit anyway?", comment: "Quit without saves error question message")
-            let info = NSLocalizedString("Quitting now will lose any changes you have made since the last successful save", comment: "Quit without saves error question info");
-            let quitButton = NSLocalizedString("Quit anyway", comment: "Quit anyway button title")
-            let cancelButton = NSLocalizedString("Cancel", comment: "Cancel button title")
-            let alert = NSAlert()
-            alert.messageText = question
-            alert.informativeText = info
-            alert.addButton(withTitle: quitButton)
-            alert.addButton(withTitle: cancelButton)
-            
-            let answer = alert.runModal()
-            if answer == .alertSecondButtonReturn {
-                return .terminateCancel
-            }
-        }
-        // If we got here, it is time to quit.
-        return .terminateNow
-    }
-
 }
-
